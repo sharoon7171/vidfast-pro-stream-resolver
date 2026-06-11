@@ -1,131 +1,367 @@
 # vidfast-pro
 
-Reverse-engineering toolkit for the [VidFast](https://www.vidfast.net) embed player. The site serves obfuscated client-side JavaScript that gates stream discovery behind string tables, environment checks, and a vendor VM. This repository recovers that pipeline in Node: static string deobfuscation from a webpack chunk, headless execution of the same VM logic, parallel upstream probing against VidFast mirrors, and an HLS rewrite proxy for local validation.
+Decrypts VidFast encrypted payloads, resolves m3u8 URLs from a TMDB content id, and exposes the result over HTTP with a web client for playback.
 
-**Upstream:** [https://www.vidfast.net](https://www.vidfast.net) (override with `VIDFAST_ORIGIN`)  
-**Local UI:** [http://127.0.0.1:8787](http://127.0.0.1:8787) after `npm start` (default `PORT`)
+---
 
-## Problem class
+## 1. Overview
 
-Typical VidFast embed protection stacks combine:
+VidFast returns encrypted base64 blobs for two data types:
 
-- **Chunk isolation** — `mf` / `mZ` logic lives in a numbered bundle (`assets/chunk-365.js` from the site webpack build), not the entry script on the embed page.
-- **String tables** — API path segments are resolved through rotated decoders (`i3`, `i5`, `i7`) instead of plain strings.
-- **Environment gates** — headless, worker, and frame checks run before server lists or decode URLs are returned.
-- **HLS upstream** — `.m3u8` responses use relative segments and non-standard MPEG-TS framing (PNG-wrapped sync bytes).
-
-Embed pages follow predictable content paths on the site, for example `/movie/{tmdbId}` or `/tv/{tmdbId}/{season}/{episode}`.
-
-## Pipeline
-
-| Step | Action | Output |
+| Encrypted input | Plaintext output | Purpose |
 | --- | --- | --- |
-| Static extract | Boundaries for decoder functions + rotation IIFE in chunk 365 | `tools/extract-decoder.mjs` → `lib/string-decoder.generated.js` |
-| Path rebuild | `decodeString` indices for content and stream prefixes | `lib/content-path.js` |
-| VM slice | Cut `mf`/`mZ` region; patch `mV`/`mA`/`mU`, crypto and DOM shims | `lib/chunk-patches.js`, `lib/vm-engine.js` |
-| Headless run | `createVmRuntime()` via `new Function` with `fetch` / `Worker` stubs | `runServers`, `runDecode` |
-| Probe | Concurrent POST on each server `data` slug from VidFast | `probeAvailableServers()` |
-| Playback | Manifest line rewrite; strip IEND prefix before `0x47` | `lib/hls-proxy.js` |
+| `capture/probe.b64` | Server list (`name`, `data`, …) | Catalog of streaming servers |
+| Stream POST response body | `{ url: "….m3u8", … }` | Direct HLS manifest URL |
 
-## Architecture
+Both use the same cipher and the same keys from `capture/keys.json`. The codebase decrypts them in `src/dec/`, loads keys and probe via `src/capture/init.js`, fetches stream blobs via `src/net/vidfast.js`, and orchestrates the full chain in `src/resolve/run.js`.
+
+---
+
+## 2. Decryption
+
+### 2.1 Inputs and outputs
+
+```
+capture/keys.json ──► parseKeys() ──► { k1, k2, k3 }
+                                           │
+capture/probe.b64 ──► decProbe() ──────────┤──► [ { name, data, description, image }, … ]
+                                           │
+Stream POST body  ──► decStream() ─────────┘──► "https://…/index.m3u8"
+```
+
+| Ciphertext source | File on disk | Decrypt function | Module | Output |
+| --- | --- | --- | --- | --- |
+| Server list | `capture/probe.b64` | `decProbe(b64, keys)` | `src/dec/probe.js` | Array of server rows |
+| Stream URL | VidFast POST response | `decStream(b64, keys)` | `src/dec/stream.js` | m3u8 URL string |
+| Either (raw JSON) | Any base64 blob | `decJson(b64, keys)` | `src/dec/aes.js` | Parsed JSON object |
+
+Keys are never embedded in ciphertext. They are loaded once from disk:
+
+```
+capture/keys.json ──► parseKeys() ──► src/dec/keys.js ──► { k1, k2, k3 } as Buffer
+```
+
+### 2.2 Cipher
+
+All decrypt paths call `decJson()` in `src/dec/aes.js`.
+
+**Implementation:** Node.js `node:crypto` — `createHash('sha256')`, `createDecipheriv('aes-256-gcm')`.
+
+**Blob layout (after base64 decode):**
+
+| Offset | Size | Field |
+| --- | --- | --- |
+| 0 | 16 | Header |
+| 16 | 12 | IV |
+| 28 | n | Ciphertext |
+| 28 + n | 16 | Auth tag |
+
+**Key derivation:**
+
+```
+h1  = SHA256(k1 ‖ k2 ‖ k3)
+key = SHA256(h1 ‖ header)
+```
+
+**Decrypt:**
+
+```
+plain = AES-256-GCM-Decrypt(key, iv, ciphertext, tag)
+json  = JSON.parse(plain.subarray(8))
+```
+
+Bytes 0–7 of plaintext are discarded before JSON parsing.
+
+### 2.3 Module chain
+
+```
+src/dec/keys.js       parseKeys(raw)           keys.json object → { k1, k2, k3 }
+        │
+        ▼
+src/dec/aes.js        decJson(b64, keys)       base64 blob → JSON
+        │
+        ├──► src/dec/probe.js   decProbe(b64, keys)   JSON → server rows
+        │
+        └──► src/dec/stream.js  decStream(b64, keys)  JSON → json.url
+```
+
+`src/dec/` has no filesystem or network access. Callers supply `b64` and `keys`.
+
+### 2.4 Loader
+
+`src/capture/init.js` reads disk artifacts and wires decrypt calls:
+
+| Function | Reads | Calls | Returns |
+| --- | --- | --- | --- |
+| `warm()` | `keys.json`, `probe.b64` | `parseKeys`, caches in memory | — |
+| `listProbe()` | cached probe + keys | `decProbe` | Server rows |
+| `urlFromBlob(b64)` | cached keys | `decStream` | m3u8 URL |
+
+Loaded once per process. Restart required after editing `capture/`.
+
+---
+
+## 3. Resolve
+
+Resolve turns a content id into decrypted m3u8 URLs for every server in the probe list.
+
+### 3.1 Pipeline
+
+```
+listProbe()                         decrypt probe.b64 → server rows
+    │
+    ▼
+for each row (8 workers):
+    postStream(row.data, pagePath)  POST to VidFast → base64 body
+    urlFromBlob(b64)                decrypt body → m3u8 URL
+    │
+    ▼
+yield NDJSON events                 meta → server → done
+```
+
+### 3.2 Content paths
+
+| Query `type` | Path built |
+| --- | --- |
+| `movie` | `/movie/{id}` |
+| `tv` | `/tv/{id}/{season}/{episode}` |
+
+Built in `src/resolve/run.js` from `URLSearchParams`. Used as the `Referer` suffix on stream POST.
+
+### 3.3 Stream POST
+
+`src/net/vidfast.js` → `postStream(data, page)`
+
+**Reads:** `capture/routes.json`
+
+**Request:**
+
+```
+POST {origin}/{probePrefix}/{streamPrefixB}/{data}
+Referer: {origin}{page}
+Origin:  {origin}
++ csrfHeaders, User-Agent
+Timeout: 2500 ms
+```
+
+**Returns:** trimmed base64 ciphertext, or `null` on failure / JSON error body.
+
+That base64 string is the input to `urlFromBlob()` → `decStream()` → `decJson()`.
+
+### 3.4 Concurrency
+
+`src/resolve/pool.js` runs up to 8 parallel `postStream` + decrypt jobs. Results yield in completion order. Duplicate m3u8 URLs are skipped. Failed POST or decrypt returns `null` for that server only.
+
+### 3.5 Server result object
+
+Produced by `src/resolve/run.js`:
+
+| Field | Source |
+| --- | --- |
+| `name`, `description`, `image`, `data` | Probe row |
+| `streamUrl` | `decStream` output |
+| `playbackUrl` | `{origin}/api/hls?url={encodeURIComponent(streamUrl)}` |
+
+---
+
+## 4. HTTP server
+
+**Entry:** `npm start` → `src/srv/http.js`  
+**Port:** `8787` (env `PORT`)
+
+| Route | Module used | Action |
+| --- | --- | --- |
+| `GET /api/resolve` | `src/resolve/run.js` | Stream NDJSON resolve events |
+| `GET /api/hls?url=` | `src/net/hls.js` | Proxy HLS manifest or segment |
+| `GET /` | — | Serve `public/index.html` |
+
+Startup calls `warm()` to preload `capture/` into memory.
+
+### 4.1 `/api/resolve`
+
+**Query:** `id` (required), `type` (`movie`|`tv`), `season`, `episode`
+
+**Response:** `application/x-ndjson`
+
+| Event | Payload |
+| --- | --- |
+| `meta` | `{ type, contentPath, total }` |
+| `server` | `{ server: { name, streamUrl, playbackUrl, … } }` |
+| `done` | `{ servers: [...] }` |
+| `error` | `{ error }` (mid-stream only) |
+
+### 4.2 `/api/hls`
+
+Does not decrypt. Fetches upstream HLS with VidFast referrer headers.
+
+| Response type | Behavior |
+| --- | --- |
+| `.m3u8` manifest | Rewrite segment URLs to loop through `/api/hls` |
+| Segment bytes | Strip PNG wrapper if present; return MPEG-TS |
+
+---
+
+## 5. Web client
+
+**File:** `public/index.html`
+
+| Dependency | Source |
+| --- | --- |
+| hls.js 1.5.15 | jsDelivr CDN |
+
+| Action | API used |
+| --- | --- |
+| Fetch streams | `GET /api/resolve` — reads NDJSON stream |
+| Play video | `GET /api/hls` via `server.playbackUrl` |
+| Switch server | Changes `playbackUrl` on `<video>` / hls.js instance |
+
+Link panel exports `streamUrl` (direct), `playbackUrl` (proxy), and mpv/vlc commands with `Referer: https://vidfast.pro/`.
+
+---
+
+## 6. Configuration
+
+All runtime config lives in `capture/`.
+
+### keys.json
+
+```json
+{ "stream": { "k1": "<hex>", "k2": "<hex>", "k3": "<hex>" } }
+```
+
+Used by: `src/capture/init.js` → `src/dec/keys.js` → all decrypt functions.
+
+### probe.b64
+
+Base64 ciphertext of the server list. Used by: `listProbe()` → `decProbe()`.
+
+### routes.json
+
+```json
+{
+  "origin": "https://vidfast.pro",
+  "probePrefix": "/…/x",
+  "streamPrefixB": "…",
+  "csrfHeaders": {}
+}
+```
+
+Used by: `src/net/vidfast.js` only. Not involved in decryption.
+
+---
+
+## 7. Architecture
 
 ```mermaid
 flowchart LR
-  subgraph static [Static analysis]
-    Chunk[chunk-365.js]
-    Extract[extract-decoder.mjs]
-    Decoder[string-decoder.generated.js]
-    Chunk --> Extract --> Decoder
+  subgraph disk [capture/]
+    K[keys.json]
+    P[probe.b64]
+    R[routes.json]
   end
 
-  subgraph runtime [Node runtime]
-    VM[vm-engine.js]
-    Stream[stream.js]
-    VM --> Stream
-    Decoder --> Stream
+  subgraph dec [src/dec/]
+    PK[keys.js]
+    AES[aes.js]
+    DP[probe.js]
+    DS[stream.js]
   end
 
-  subgraph network [VidFast upstream]
-    Site[vidfast.net embed]
-    Page[Page token]
-    Probe[Server probe]
-    Decode[mZ POST decode]
-    HLS[HLS proxy]
-    Site --> Page --> Probe --> Decode --> HLS
+  subgraph cap [src/capture/init.js]
+    LP[listProbe]
+    UF[urlFromBlob]
   end
 
-  static --> runtime
-  runtime --> network
+  subgraph net [src/net/]
+    VF[vidfast.js]
+    HLS[hls.js]
+  end
+
+  subgraph res [src/resolve/run.js]
+    RR[runResolve]
+  end
+
+  K --> PK --> AES
+  P --> LP --> DP --> AES
+  LP --> DP
+  UF --> DS --> AES
+
+  R --> VF
+  VF -->|base64 body| UF
+  LP --> RR
+  VF --> RR
+  RR -->|NDJSON| API["/api/resolve"]
+  HLS --> HAPI["/api/hls"]
 ```
 
-## Layout
+---
+
+## 8. Project structure
 
 ```
-lib/
-  vm-engine.js
-  chunk-patches.js
-  stream.js
-  content-path.js
-  hls-proxy.js
-  constants.js
-
-tools/
-  extract-decoder.mjs
-  resolve-stream.mjs
-
-assets/chunk-365.js
-server.mjs
-public/index.html
+capture/                  Keys, encrypted probe, API routes
+public/index.html         Web client
+src/
+  dec/                    Decrypt layer (keys → aes → probe | stream)
+  capture/init.js         Load capture/ ; listProbe ; urlFromBlob
+  net/vidfast.js          Stream POST to VidFast
+  net/hls.js              HLS CDN proxy
+  resolve/run.js          Resolve orchestration
+  resolve/pool.js         Worker pool
+  srv/http.js             HTTP entry point
+package.json              npm start → node src/srv/http.js
 ```
 
-## VM hosting
+---
 
-The extracted slice keeps vendor `mf` and `mZ` intact. Patches short-circuit sandbox heuristics (`mV`, `mA`, `mU`) and supply `crypto.randomBytes`, `Worker`, and minimal `document` / `location` bound to the VidFast origin so `runServers(en)` and `runDecode(responseText)` match browser behavior without a full DOM.
+## 9. Stack
 
-## HLS proxy
+| | |
+| --- | --- |
+| Runtime | Node.js 18+ |
+| Modules | ESM |
+| npm packages | None |
+| Node built-ins | `crypto`, `http`, `fs`, `path`, `url`, `buffer` |
+| Browser | hls.js (CDN) |
 
-`/api/hls` rewrites non-comment playlist lines to absolute proxy URLs on the local server. Segment bodies may embed TS after a PNG `IEND` block; the proxy scans for the transport sync byte before forwarding to the player.
+---
 
-## Usage
+## 10. Usage
 
-Requires Node 18+.
-
-Regenerate the string decoder after updating `assets/chunk-365.js`, resolve a title from the CLI, or use the bundled web UI:
+**Server**
 
 ```bash
-npm run extract-decoder
-npm run resolve
 npm start
 ```
 
-Open [http://127.0.0.1:8787](http://127.0.0.1:8787) to pick a TMDB id, probe working mirrors, decode, and play through the local HLS proxy.
-
-CLI examples (movie and TV embed ids):
+**Resolve (curl)**
 
 ```bash
-node tools/resolve-stream.mjs 1265609
-node tools/resolve-stream.mjs tv 95396 1 1
+curl -N 'http://127.0.0.1:8787/api/resolve?id=550&type=movie'
 ```
 
-Point at a different VidFast host (staging mirror, alternate domain):
+**Decrypt (programmatic)**
 
-```bash
-VIDFAST_ORIGIN=https://www.vidfast.net npm run resolve
+```js
+import { warm, listProbe, urlFromBlob } from './src/capture/init.js'
+
+warm()
+const servers = listProbe()
+const url = urlFromBlob('BASE64_FROM_STREAM_POST')
 ```
 
-| Variable | Default | Role |
-| --- | --- | --- |
-| `VIDFAST_ORIGIN` | `https://www.vidfast.net` | Upstream site for page fetch, probes, and decode POSTs |
-| `PORT` | `8787` | Local HTTP server and player UI |
+**Resolve (programmatic)**
 
-| Endpoint | Role |
+```js
+import { runResolve } from './src/resolve/run.js'
+
+for await (const evt of runResolve(new URLSearchParams({ id: '550' }), 'http://127.0.0.1:8787')) {
+  console.log(evt)
+}
+```
+
+**Environment**
+
+| Variable | Default |
 | --- | --- |
-| `GET /` | Player UI ([http://127.0.0.1:8787](http://127.0.0.1:8787)) |
-| `GET /api/stream?id=&type=movie` | Full movie resolve against VidFast |
-| `GET /api/stream?id=&season=&episode=` | TV resolve against VidFast |
-| `POST /api/server` | Decode one server `data` blob |
-| `GET /api/hls?url=` | Proxied manifest or segment for playback |
-
-## Scope
-
-Authorized analysis and local testing only. Not intended to bypass access controls or [VidFast](https://www.vidfast.net) terms of service.
+| `PORT` | `8787` |

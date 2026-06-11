@@ -1,269 +1,323 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>VidFast Stream Resolver</title>
-  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.20/dist/hls.min.js"></script>
+  <title>VidFast Stream Player</title>
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.15"></script>
   <style>
-    :root { color-scheme: dark; font-family: Inter, system-ui, sans-serif; }
-    html, body { height: 100%; margin: 0; overflow: hidden; }
-    body {
-      background: #090b0f;
-      color: #e8eef5;
-      display: grid;
-      grid-template-rows: auto auto minmax(0, 1fr);
-      height: 100dvh;
-    }
-    header {
-      padding: 8px 12px;
-      border-bottom: 1px solid #1d2630;
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-      align-items: center;
-    }
-    input, button, select {
-      background: #121820;
-      color: inherit;
-      border: 1px solid #273241;
-      border-radius: 8px;
-      padding: 6px 10px;
-      font-size: 13px;
-    }
-    button { cursor: pointer; }
-    button:disabled { opacity: .5; }
-    .hint {
-      color: #8aa0b5;
-      font-size: 12px;
-      padding: 4px 12px;
-      margin: 0;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    main {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      grid-template-rows: minmax(0, 1fr) minmax(0, 28%);
-      gap: 8px;
-      padding: 8px 12px 12px;
-      min-height: 0;
-    }
-    video {
-      width: 100%;
-      height: 100%;
-      min-height: 0;
-      background: #000;
-      border-radius: 10px;
-      grid-column: 1 / -1;
-      object-fit: contain;
-    }
-    pre {
-      background: #10151c;
-      border: 1px solid #1d2630;
-      border-radius: 8px;
-      padding: 8px 10px;
-      font-size: 10px;
-      line-height: 1.35;
-      overflow: auto;
-      white-space: pre-wrap;
-      word-break: break-word;
-      margin: 0;
-      min-height: 0;
-    }
-    @media (max-width: 900px) {
-      main {
-        grid-template-columns: 1fr;
-        grid-template-rows: minmax(0, 1fr) minmax(0, 18%) minmax(0, 18%);
-      }
-    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; background: #0f1117; color: #e8eaed; }
+    .wrap { max-width: 960px; margin: 0 auto; padding: 24px 16px 40px; display: flex; flex-direction: column; gap: 16px; }
+    .head h1 { font-size: 1.5rem; font-weight: 600; margin-bottom: 6px; }
+    .head p { color: #9aa0a6; font-size: 0.9rem; line-height: 1.45; }
+    .head a { color: #8ab4f8; text-decoration: none; }
+    .head a:hover { text-decoration: underline; }
+    .q-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+    .q-field { display: flex; flex-direction: column; gap: 4px; font-size: 0.75rem; color: #9aa0a6; }
+    .q-field input, .q-field select { background: #1a1d27; border: 1px solid #2d3140; border-radius: 6px; color: #e8eaed; padding: 8px 10px; font-size: 0.9rem; min-width: 100px; }
+    .q-field input:focus, .q-field select:focus { outline: none; border-color: #8ab4f8; }
+    .q-run { background: #8ab4f8; color: #0f1117; border: none; border-radius: 6px; padding: 9px 18px; font-size: 0.9rem; font-weight: 600; cursor: pointer; }
+    .q-run:hover { background: #aecbfa; }
+    .q-run:disabled { opacity: 0.5; cursor: not-allowed; }
+    .bar { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; font-size: 0.85rem; color: #9aa0a6; min-height: 1.2em; }
+    .bar.err { color: #f28b82; }
+    .bar-path { color: #8ab4f8; }
+    .sec-title { font-size: 0.75rem; color: #9aa0a6; font-weight: 600; margin-bottom: 10px; letter-spacing: 0.04em; text-transform: uppercase; }
+    #play { width: 100%; background: #000; border-radius: 8px; aspect-ratio: 16/9; display: block; }
+    .srv-list { display: flex; flex-wrap: wrap; gap: 8px; }
+    .srv-btn { background: #1a1d27; border: 1px solid #2d3140; color: #e8eaed; border-radius: 6px; padding: 7px 12px; font-size: 0.8rem; cursor: pointer; }
+    .srv-btn:hover { border-color: #8ab4f8; }
+    .srv-btn.on { background: #2d3a52; border-color: #8ab4f8; color: #8ab4f8; }
+    .link-list { display: grid; gap: 10px; }
+    .link-box { padding: 10px 12px; background: #1a1d27; border: 1px solid #2d3140; border-radius: 8px; }
+    .link-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
+    .link-tag { font-size: 0.75rem; font-weight: 600; color: #9aa0a6; letter-spacing: 0.04em; text-transform: uppercase; }
+    .link-cp { background: #2d3140; border: 1px solid #3d4455; color: #8ab4f8; border-radius: 6px; padding: 4px 10px; font-size: 0.75rem; font-weight: 600; cursor: pointer; font-family: inherit; }
+    .link-cp:hover { border-color: #8ab4f8; background: #2d3a52; }
+    .link-val { word-break: break-all; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.75rem; line-height: 1.4; color: #e8eaed; }
+    .hide { display: none; }
   </style>
 </head>
 <body>
-  <header>
-    <strong>VidFast Stream Resolver</strong>
-    <select id="type">
-      <option value="movie">Movie</option>
-      <option value="tv">TV</option>
-    </select>
-    <input id="contentId" value="1265609" size="10" placeholder="TMDB id">
-    <input id="season" value="1" size="3" placeholder="S" hidden>
-    <input id="episode" value="1" size="3" placeholder="E" hidden>
-    <select id="server"></select>
-    <button id="run">Decode &amp; play</button>
-  </header>
-  <p class="hint">Decode once — dropdown lists only mirrors that work for this title.</p>
-  <main>
-    <video id="video" controls playsinline crossorigin="anonymous"></video>
-    <pre id="status">Ready.</pre>
-    <pre id="debug"></pre>
+  <main class="wrap">
+    <header class="head">
+      <h1>VidFast Stream Player</h1>
+      <p>Resolve and play streams from <a href="https://www.vidfast.net/" target="_blank" rel="noopener">vidfast.net</a>. First server plays instantly; rest load in parallel.</p>
+    </header>
+
+    <form id="q">
+      <div class="q-row">
+        <label class="q-field">Type
+          <select id="q-type">
+            <option value="movie">Movie</option>
+            <option value="tv">TV</option>
+          </select>
+        </label>
+        <label class="q-field">ID
+          <input id="q-id" type="text" value="550" placeholder="TMDB" required>
+        </label>
+        <label class="q-field hide" id="q-season-wrap">Season
+          <input id="q-season" type="text" value="1">
+        </label>
+        <label class="q-field hide" id="q-ep-wrap">Episode
+          <input id="q-ep" type="text" value="1">
+        </label>
+        <button type="submit" class="q-run" id="q-run">Fetch streams</button>
+      </div>
+    </form>
+
+    <div class="bar" id="bar">
+      <span id="bar-msg"></span>
+      <span class="bar-path hide" id="bar-path"></span>
+    </div>
+
+    <section id="sec-play">
+      <video id="play" controls playsinline></video>
+    </section>
+
+    <section id="sec-srv">
+      <h2 class="sec-title">Servers</h2>
+      <div class="srv-list" id="srv-list"></div>
+    </section>
+
+    <section class="hide" id="sec-links">
+      <h2 class="sec-title" id="links-h">Links</h2>
+      <div class="link-list">
+        <article class="link-box">
+          <div class="link-top">
+            <span class="link-tag">direct</span>
+            <button type="button" class="link-cp" data-k="direct">Copy</button>
+          </div>
+          <div class="link-val" id="v-direct"></div>
+        </article>
+        <article class="link-box">
+          <div class="link-top">
+            <span class="link-tag">proxy</span>
+            <button type="button" class="link-cp" data-k="proxy">Copy</button>
+          </div>
+          <div class="link-val" id="v-proxy"></div>
+        </article>
+        <article class="link-box">
+          <div class="link-top">
+            <span class="link-tag">mpv</span>
+            <button type="button" class="link-cp" data-k="mpv">Copy</button>
+          </div>
+          <div class="link-val" id="v-mpv"></div>
+        </article>
+        <article class="link-box">
+          <div class="link-top">
+            <span class="link-tag">vlc</span>
+            <button type="button" class="link-cp" data-k="vlc">Copy</button>
+          </div>
+          <div class="link-val" id="v-vlc"></div>
+        </article>
+      </div>
+    </section>
   </main>
+
   <script>
-    const video = document.getElementById('video')
-    const status = document.getElementById('status')
-    const debug = document.getElementById('debug')
-    const btn = document.getElementById('run')
-    const typeSelect = document.getElementById('type')
-    const contentId = document.getElementById('contentId')
-    const seasonInput = document.getElementById('season')
-    const episodeInput = document.getElementById('episode')
-    const serverSelect = document.getElementById('server')
-    let hls
-    let session = null
+    const REF = 'https://vidfast.pro/'
 
-    const presets = {
-      movie: { id: '1265609' },
-      tv: { id: '95396', season: '1', episode: '1' },
+    const ui = {
+      bar: document.getElementById('bar'),
+      msg: document.getElementById('bar-msg'),
+      path: document.getElementById('bar-path'),
+      q: document.getElementById('q'),
+      qType: document.getElementById('q-type'),
+      qId: document.getElementById('q-id'),
+      qSeasonWrap: document.getElementById('q-season-wrap'),
+      qSeason: document.getElementById('q-season'),
+      qEpWrap: document.getElementById('q-ep-wrap'),
+      qEp: document.getElementById('q-ep'),
+      qRun: document.getElementById('q-run'),
+      play: document.getElementById('play'),
+      srvList: document.getElementById('srv-list'),
+      secLinks: document.getElementById('sec-links'),
+      linksH: document.getElementById('links-h'),
+      linkVal: {
+        direct: document.getElementById('v-direct'),
+        proxy: document.getElementById('v-proxy'),
+        mpv: document.getElementById('v-mpv'),
+        vlc: document.getElementById('v-vlc'),
+      },
     }
 
-    function syncTypeFields() {
-      const isTv = typeSelect.value === 'tv'
-      seasonInput.hidden = !isTv
-      episodeInput.hidden = !isTv
-      const preset = presets[typeSelect.value]
-      contentId.value = preset.id
-      if (isTv) {
-        seasonInput.value = preset.season
-        episodeInput.value = preset.episode
+    const state = {
+      hls: null,
+      list: null,
+      idx: 0,
+      links: { direct: '', proxy: '', mpv: '', vlc: '' },
+    }
+
+    function msg(text, err) {
+      ui.msg.textContent = text
+      ui.bar.classList.toggle('err', !!err)
+    }
+
+    function tvMode(on) {
+      ui.qSeasonWrap.classList.toggle('hide', !on)
+      ui.qEpWrap.classList.toggle('hide', !on)
+    }
+
+    function packLinks(srv) {
+      return {
+        direct: srv.streamUrl,
+        proxy: srv.playbackUrl,
+        mpv: `mpv --referrer='${REF}' '${srv.streamUrl}'`,
+        vlc: `vlc --http-referrer='${REF}' '${srv.streamUrl}'`,
       }
     }
 
-    typeSelect.onchange = () => {
-      session = null
-      syncTypeFields()
+    function showLinks(srv) {
+      state.links = packLinks(srv)
+      ui.linksH.textContent = 'Links — ' + srv.name
+      ui.linkVal.direct.textContent = state.links.direct
+      ui.linkVal.proxy.textContent = state.links.proxy
+      ui.linkVal.mpv.textContent = state.links.mpv
+      ui.linkVal.vlc.textContent = state.links.vlc
+      ui.secLinks.classList.remove('hide')
     }
 
-    function fillServers(servers, selectedIndex) {
-      const keep = serverSelect.value
-      serverSelect.innerHTML = ''
-      servers.forEach((s, i) => {
-        const opt = document.createElement('option')
-        opt.value = String(i)
-        opt.textContent = s.description ? `${s.name} — ${s.description}` : s.name
-        serverSelect.appendChild(opt)
+    async function cp(text, tag) {
+      await navigator.clipboard.writeText(text)
+      msg('Copied ' + tag)
+    }
+
+    function playProxy(url) {
+      if (state.hls) { state.hls.destroy(); state.hls = null }
+      const go = () => ui.play.play().catch(() => {})
+      if (ui.play.canPlayType('application/vnd.apple.mpegurl')) {
+        ui.play.src = url
+        ui.play.addEventListener('loadedmetadata', go, { once: true })
+      } else if (Hls.isSupported()) {
+        state.hls = new Hls()
+        state.hls.on(Hls.Events.MANIFEST_PARSED, go)
+        state.hls.loadSource(url)
+        state.hls.attachMedia(ui.play)
+      } else {
+        msg('HLS not supported', true)
+      }
+    }
+
+    function paintSrv(list, idx) {
+      ui.srvList.innerHTML = ''
+      list.forEach((srv, i) => {
+        const btn = document.createElement('button')
+        btn.type = 'button'
+        btn.className = 'srv-btn' + (i === idx ? ' on' : '')
+        btn.textContent = srv.name + (srv.description ? ' — ' + srv.description : '')
+        btn.addEventListener('click', () => pickSrv(i))
+        ui.srvList.appendChild(btn)
       })
-      const index = keep && servers[keep] ? keep : String(selectedIndex ?? 0)
-      serverSelect.value = index
     }
 
-    function stopPlayback() {
-      if (hls) { hls.destroy(); hls = null }
-      video.removeAttribute('src')
-      video.load()
+    function statSrv() {
+      const srv = state.list[state.idx]
+      msg('Playing ' + srv.name + ' — ' + state.list.length + ' available')
     }
 
-    function play(url) {
-      if (hls) { hls.destroy(); hls = null }
-      if (url.includes('.m3u8') && window.Hls && Hls.isSupported()) {
-        hls = new Hls({ enableWorker: true })
-        hls.on(Hls.Events.ERROR, (_, data) => {
-          if (data.fatal) status.textContent = `HLS ${data.type}: ${data.details}`
-        })
-        hls.loadSource(url)
-        hls.attachMedia(video)
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          video.play().catch((e) => { status.textContent = String(e) })
-        })
-        return
+    function pickSrv(idx, quiet) {
+      if (!state.list?.[idx]) return
+      state.idx = idx
+      const srv = state.list[idx]
+      paintSrv(state.list, idx)
+      playProxy(srv.playbackUrl)
+      showLinks(srv)
+      if (!quiet) statSrv()
+    }
+
+    async function pipeNdjson(res) {
+      const reader = res.body.getReader()
+      const dec = new TextDecoder()
+      let buf = ''
+      let boot = false
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buf += dec.decode(value, { stream: true })
+        const lines = buf.split('\n')
+        buf = lines.pop() || ''
+
+        for (const line of lines) {
+          if (!line.trim()) continue
+          const evt = JSON.parse(line)
+          if (evt.event === 'error') throw new Error(evt.error || 'resolve failed')
+          if (evt.event === 'meta') {
+            ui.path.textContent = evt.contentPath || ''
+            ui.path.classList.remove('hide')
+            msg('Probing…')
+          }
+          if (evt.event === 'server') {
+            if (!state.list) state.list = []
+            state.list.push(evt.server)
+            paintSrv(state.list, state.idx)
+            if (!boot) {
+              boot = true
+              pickSrv(0, true)
+            }
+            statSrv()
+          }
+          if (evt.event === 'done') {
+            state.list = evt.servers
+            state.idx = Math.min(state.idx, state.list.length - 1)
+            paintSrv(state.list, state.idx)
+            showLinks(state.list[state.idx])
+            statSrv()
+          }
+        }
       }
-      video.src = url
-      video.play().catch((e) => { status.textContent = String(e) })
+
+      if (!state.list?.length) throw new Error('no servers returned')
     }
 
-    async function fullDecode() {
-      const id = contentId.value.trim()
-      const type = typeSelect.value
-      btn.disabled = true
-      serverSelect.disabled = true
-      status.textContent = 'Finding available servers…'
+    function qParams() {
+      const p = new URLSearchParams({ id: ui.qId.value.trim(), type: ui.qType.value })
+      if (ui.qType.value === 'tv') {
+        p.set('season', ui.qSeason.value.trim())
+        p.set('episode', ui.qEp.value.trim())
+      }
+      return p
+    }
+
+    function resetRun() {
+      msg('Resolving…')
+      ui.path.classList.add('hide')
+      ui.secLinks.classList.add('hide')
+      ui.srvList.innerHTML = ''
+      state.list = null
+      state.idx = 0
+      state.links = { direct: '', proxy: '', mpv: '', vlc: '' }
+      if (state.hls) { state.hls.destroy(); state.hls = null }
+      ui.play.removeAttribute('src')
+      ui.play.load()
+    }
+
+    ui.qType.addEventListener('change', () => tvMode(ui.qType.value === 'tv'))
+    tvMode(false)
+
+    document.querySelectorAll('.link-cp').forEach((btn) => {
+      btn.addEventListener('click', () => cp(state.links[btn.dataset.k], btn.dataset.k))
+    })
+
+    ui.q.addEventListener('submit', async (e) => {
+      e.preventDefault()
+      ui.qRun.disabled = true
+      resetRun()
       try {
-        const qs = new URLSearchParams({ id, type })
-        if (type === 'tv') {
-          qs.set('season', seasonInput.value.trim())
-          qs.set('episode', episodeInput.value.trim())
+        const res = await fetch('/api/resolve?' + qParams())
+        if (!res.ok) {
+          const data = await res.json()
+          throw new Error(data.error || 'resolve failed')
         }
-        const res = await fetch(`/api/stream?${qs}`)
-        const data = await res.json()
-        debug.textContent = JSON.stringify(data, null, 2)
-        if (!data.ok) {
-          stopPlayback()
-          session = null
-          status.textContent = `Failed at ${data.stage || 'unknown'}: ${data.error || 'unknown'}`
-          if (data.servers?.length) fillServers(data.servers, serverSelect.value)
-          return
-        }
-        session = {
-          contentPath: data.contentPath,
-          type: data.type,
-          servers: data.servers,
-          activeIndex: data.selectedServer?.index ?? 0,
-          playbackUrl: data.playbackUrl,
-        }
-        if (data.servers?.length) fillServers(data.servers, session.activeIndex)
-        status.textContent = `Playing ${data.selectedServer?.name || 'stream'} (${data.servers?.length || 0} mirrors)`
-        play(data.playbackUrl || data.streamUrl)
-      } catch (e) {
-        stopPlayback()
-        session = null
-        status.textContent = String(e.message || e)
-        debug.textContent = String(e.stack || e)
+        await pipeNdjson(res)
+      } catch (err) {
+        msg(String(err.message || err), true)
       } finally {
-        btn.disabled = false
-        serverSelect.disabled = false
+        ui.qRun.disabled = false
       }
-    }
-
-    async function switchServer(index) {
-      if (!session?.servers?.[index]?.data) return
-      const server = session.servers[index]
-      const prevIndex = session.activeIndex
-      btn.disabled = true
-      serverSelect.disabled = true
-      status.textContent = `Switching to ${server.name}…`
-      try {
-        const res = await fetch('/api/server', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contentPath: session.contentPath,
-            type: session.type,
-            data: server.data,
-            serverName: server.name,
-            serverIndex: index,
-          }),
-        })
-        const data = await res.json()
-        debug.textContent = JSON.stringify({ ...data, servers: session.servers }, null, 2)
-        if (!data.ok) {
-          serverSelect.value = String(prevIndex)
-          status.textContent = `${server.name} failed — kept previous server`
-          return
-        }
-        session.activeIndex = index
-        session.playbackUrl = data.playbackUrl
-        status.textContent = `Playing ${server.name} (${session.contentPath})`
-        play(data.playbackUrl || data.streamUrl)
-      } catch (e) {
-        serverSelect.value = String(prevIndex)
-        status.textContent = `${server.name} failed — kept previous server`
-      } finally {
-        btn.disabled = false
-        serverSelect.disabled = false
-      }
-    }
-
-    btn.onclick = () => {
-      debug.textContent = ''
-      fullDecode()
-    }
-
-    serverSelect.onchange = () => {
-      if (!session) return
-      const index = Number(serverSelect.value)
-      if (index === session.activeIndex) return
-      switchServer(index)
-    }
+    })
   </script>
 </body>
 </html>
