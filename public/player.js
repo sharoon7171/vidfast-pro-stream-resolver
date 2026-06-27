@@ -1,4 +1,5 @@
 import Hls from '/vendor/hls.mjs'
+import { MediaPlayer } from '/vendor/dash.mjs'
 
 const REF = 'https://vidfast.pro/'
 const MOVIE_ID = '550'
@@ -29,12 +30,12 @@ const mpvOut = $('mpv')
 const timing = $('timing')
 const tResolve = $('t-resolve')
 const tPlay = $('t-play')
-const tTotal = $('t-total')
 const serversEl = $('servers')
 
 let hls = null
+let dashPlayer = null
 let gen = 0
-let timer = null
+let timerRaf = null
 let lastLabel = ''
 let lastServers = []
 let lastActive = ''
@@ -54,58 +55,51 @@ function showErr(message) {
 }
 
 function stopTimer() {
-  if (!timer) return
-  cancelAnimationFrame(timer.raf)
-  timer = null
+  if (!timerRaf) return
+  cancelAnimationFrame(timerRaf)
+  timerRaf = null
 }
 
-function startTimer() {
+function beginResolve() {
   stopTimer()
   timing.hidden = false
   tResolve.textContent = '0ms'
-  tPlay.textContent = 'waiting'
-  tTotal.textContent = '0ms'
   tResolve.className = 'timing__val is-live'
+  tPlay.textContent = '—'
   tPlay.className = 'timing__val'
-  tTotal.className = 'timing__val is-live'
 
   const t0 = performance.now()
-  let resolveAt = null
-  let playAt = null
-
   const tick = () => {
-    const now = performance.now()
-    if (resolveAt == null) tResolve.textContent = fmtMs(now - t0)
-    if (resolveAt != null && playAt == null) {
-      tPlay.textContent = fmtMs(now - resolveAt)
-      tPlay.className = 'timing__val is-live'
-    }
-    if (playAt == null) tTotal.textContent = fmtMs(now - t0)
-    if (playAt == null) timer.raf = requestAnimationFrame(tick)
+    tResolve.textContent = fmtMs(performance.now() - t0)
+    timerRaf = requestAnimationFrame(tick)
   }
+  timerRaf = requestAnimationFrame(tick)
 
-  timer = {
-    raf: requestAnimationFrame(tick),
-    markResolve() {
-      if (resolveAt != null) return
-      resolveAt = performance.now()
-      tResolve.textContent = fmtMs(resolveAt - t0)
-      tResolve.className = 'timing__val is-done'
-      tPlay.textContent = '0ms'
-      tPlay.className = 'timing__val is-live'
-    },
-    markPlay() {
-      if (playAt != null) return
-      if (resolveAt == null) throw new Error('resolve not marked')
-      playAt = performance.now()
-      tPlay.textContent = fmtMs(playAt - resolveAt)
-      tPlay.className = 'timing__val is-done'
-      tTotal.textContent = fmtMs(playAt - t0)
-      tTotal.className = 'timing__val is-done'
-      stopTimer()
-    },
+  return () => {
+    stopTimer()
+    tResolve.textContent = fmtMs(performance.now() - t0)
+    tResolve.className = 'timing__val is-done'
+    return beginPlayback()
   }
-  return timer
+}
+
+function beginPlayback() {
+  stopTimer()
+  tPlay.textContent = '0ms'
+  tPlay.className = 'timing__val is-live'
+
+  const t0 = performance.now()
+  const tick = () => {
+    tPlay.textContent = fmtMs(performance.now() - t0)
+    timerRaf = requestAnimationFrame(tick)
+  }
+  timerRaf = requestAnimationFrame(tick)
+
+  return () => {
+    stopTimer()
+    tPlay.textContent = fmtMs(performance.now() - t0)
+    tPlay.className = 'timing__val is-done'
+  }
 }
 
 function vlcCmd(url) {
@@ -122,64 +116,149 @@ function stop() {
     hls.destroy()
     hls = null
   }
+  if (dashPlayer) {
+    dashPlayer.reset()
+    dashPlayer.destroy()
+    dashPlayer = null
+  }
   video.pause()
   video.removeAttribute('src')
   video.load()
 }
 
-function play(entry, clock) {
-  stop()
+function guessFormat(url) {
+  const lower = url.toLowerCase()
+  if (lower.includes('.m3u8') || lower.includes('type=hls')) return 'hls'
+  return null
+}
+
+function relayUrl(url) {
+  if (url.includes('/api/hls?')) return url
+  return `/api/hls?url=${encodeURIComponent(url)}`
+}
+
+async function loadFormat(entry) {
+  if (entry.format) return entry.format
+  const guessed = guessFormat(entry.url)
+  if (guessed) {
+    entry.format = guessed
+    return guessed
+  }
+  const res = await fetch(`/api/sniff?url=${encodeURIComponent(entry.url)}`)
+  if (!res.ok) throw new Error('format sniff failed')
+  const { format } = await res.json()
+  if (!format) throw new Error('unknown stream format')
+  entry.format = format
+  return format
+}
+
+function prefetchFormat(entry) {
+  if (entry.format || guessFormat(entry.url)) return
+  void loadFormat(entry).catch(() => {})
+}
+
+function whenFirstFrame(video, dashPlayer, live, onDone) {
+  let done = false
+  const finish = () => {
+    if (done || !live()) return
+    done = true
+    video.removeEventListener('timeupdate', onTime)
+    onDone()
+  }
+  const onTime = () => {
+    if (video.currentTime > 0) finish()
+  }
+  video.addEventListener('playing', finish, { once: true })
+  video.addEventListener('timeupdate', onTime, { passive: true })
+  dashPlayer.on(MediaPlayer.events.PLAYBACK_STARTED, finish)
+  dashPlayer.on(MediaPlayer.events.PLAYBACK_PLAYING, finish)
+}
+
+function playDash(entry, markPlaybackDone) {
   const id = gen
-  const source = entry.play
-  if (!source.includes('/api/hls')) {
-    return Promise.reject(new Error('invalid play route'))
-  }
-  if (!Hls.isSupported()) {
-    return Promise.reject(new Error('HLS not supported'))
-  }
   const live = () => id === gen
 
   return new Promise((resolve, reject) => {
-    let cleaned = false
-    let started = false
-    const cleanup = () => {
-      if (cleaned) return
-      cleaned = true
-      video.removeEventListener('playing', onPlaying)
-      video.removeEventListener('error', onVideoError)
-    }
-
-    const done = () => {
-      if (!live()) return
-      cleanup()
-      err.hidden = true
-      clock?.markPlay()
-      resolve()
-    }
-
     const fail = (message) => {
       if (!live()) return
-      cleanup()
       reject(new Error(message))
     }
 
-    const onPlaying = () => done()
-    const onVideoError = () => fail('playback failed')
+    const finish = () => {
+      err.hidden = true
+      markPlaybackDone?.()
+      resolve()
+    }
 
-    video.addEventListener('playing', onPlaying)
-    video.addEventListener('error', onVideoError)
+    dashPlayer = MediaPlayer().create()
+    dashPlayer.updateSettings({
+      streaming: {
+        buffer: {
+          bufferTimeAtTopQuality: 4,
+          bufferTimeAtTopQualityLongForm: 4,
+          bufferTimeDefault: 4,
+        },
+        scheduling: { scheduleWhilePaused: false },
+      },
+    })
+    dashPlayer.addRequestInterceptor(async (request) => {
+      request.url = relayUrl(request.url)
+      return request
+    })
+    whenFirstFrame(video, dashPlayer, live, finish)
+    dashPlayer.on(MediaPlayer.events.ERROR, (_, data) => {
+      if (data?.error) fail(String(data.error.message || data.error.code || 'playback failed'))
+    })
+    dashPlayer.initialize(video, entry.play, false)
+    video.play().catch((error) => fail(error.message))
+  })
+}
 
-    hls = new Hls({ enableWorker: true, startFragPrefetch: true })
+async function play(entry, markPlaybackDone) {
+  stop()
+  if (entry.format === 'dash') return playDash(entry, markPlaybackDone)
+  if (entry.format === 'hls' || guessFormat(entry.url) === 'hls') {
+    entry.format = 'hls'
+    return playHls(entry, markPlaybackDone)
+  }
+  const format = await loadFormat(entry)
+  if (format === 'dash') return playDash(entry, markPlaybackDone)
+  return playHls(entry, markPlaybackDone)
+}
+
+function playHls(entry, markPlaybackDone) {
+  const id = gen
+  const source = entry.play
+
+  if (!Hls.isSupported()) {
+    throw new Error('HLS not supported')
+  }
+
+  const live = () => id === gen
+
+  return new Promise((resolve, reject) => {
+    const fail = (message) => {
+      if (!live()) return
+      reject(new Error(message))
+    }
+
+    const onPlaying = () => {
+      if (!live()) return
+      err.hidden = true
+      markPlaybackDone?.()
+      resolve()
+    }
+
+    video.addEventListener('playing', onPlaying, { once: true })
+    video.addEventListener('error', () => fail('playback failed'), { once: true })
+
+    hls = new Hls({ enableWorker: true, maxBufferLength: 8, maxMaxBufferLength: 16 })
     hls.on(Hls.Events.ERROR, (_, data) => {
       if (data.fatal) fail(data.details ?? 'playback failed')
     })
-    hls.on(Hls.Events.FRAG_BUFFERED, () => {
-      if (!live() || started) return
-      started = true
-      video.play().catch((error) => fail(error.message))
-    })
     hls.attachMedia(video)
     hls.loadSource(source)
+    video.play().catch((error) => fail(error.message))
   })
 }
 
@@ -244,39 +323,76 @@ function queryParams() {
   return params
 }
 
-async function pipeNdjson(res, clock) {
-  const reader = res.body.getReader()
-  const dec = new TextDecoder()
-  let buf = ''
+async function handleResolveEvent(evt, finishResolve) {
+  if (evt.event === 'error') throw new Error(`${evt.stage || 'error'}: ${evt.error || 'resolve failed'}`)
+  if (evt.event === 'meta') {
+    lastLabel = mediaLabel(evt.title, evt.year)
+    panel.hidden = false
+    return
+  }
+  if (evt.event !== 'server') return
+  lastServers.push(evt.server)
+  prefetchFormat(evt.server)
+  renderServers(lastServers, lastActive)
+  if (!playing) {
+    playing = true
+    const markPlaybackDone = finishResolve()
+    selectServer(evt.server.name)
+    play(evt.server, markPlaybackDone).catch((e) => showErr(e.message))
+  }
+  await new Promise((r) => requestAnimationFrame(r))
+}
 
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buf += dec.decode(value, { stream: true })
-    const lines = buf.split('\n')
-    buf = lines.pop() || ''
-
-    for (const line of lines) {
-      if (!line.trim()) continue
-      const evt = JSON.parse(line)
-      if (evt.event === 'error') throw new Error(`${evt.stage || 'error'}: ${evt.error || 'resolve failed'}`)
-      if (evt.event === 'meta') {
-        lastLabel = mediaLabel(evt.title, evt.year)
-        panel.hidden = false
-      }
-      if (evt.event === 'server') {
-        lastServers.push(evt.server)
-        renderServers(lastServers, lastActive)
-        if (!playing) {
-          playing = true
-          clock.markResolve()
-          selectServer(evt.server.name)
-          play(evt.server, clock).catch((e) => showErr(e.message))
-        }
-      }
-    }
+async function consumeResolve(url, finishResolve) {
+  let chain = Promise.resolve()
+  const enqueue = (evt) => {
+    chain = chain.then(() => handleResolveEvent(evt, finishResolve))
   }
 
+  await new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('GET', url)
+    let offset = 0
+    let buf = ''
+    let failed = false
+
+    const fail = (error) => {
+      if (failed) return
+      failed = true
+      reject(error)
+    }
+
+    const flush = () => {
+      const chunk = xhr.responseText.slice(offset)
+      if (!chunk) return
+      offset = xhr.responseText.length
+      buf += chunk
+      const lines = buf.split('\n')
+      buf = lines.pop() || ''
+      for (const line of lines) {
+        if (!line.trim()) continue
+        enqueue(JSON.parse(line))
+      }
+    }
+
+    const finish = () => {
+      if (failed) return
+      if (xhr.status >= 400) {
+        fail(new Error(`resolve failed: ${xhr.status}`))
+        return
+      }
+      flush()
+      if (buf.trim()) enqueue(JSON.parse(buf))
+      chain.then(resolve).catch(reject)
+    }
+
+    xhr.onprogress = flush
+    xhr.onload = finish
+    xhr.onerror = () => fail(new Error('resolve failed'))
+    xhr.send()
+  })
+
+  await chain
   if (!lastServers.length) throw new Error('no servers returned')
 }
 
@@ -299,11 +415,9 @@ serversEl.addEventListener('click', async (event) => {
   if (!btnNode || btnNode.dataset.name === lastActive) return
   const entry = selectServer(btnNode.dataset.name)
   if (!entry) return
-  const clock = startTimer()
-  clock.markResolve()
   err.hidden = true
   try {
-    await play(entry, clock)
+    await play(entry, beginPlayback())
   } catch (e) {
     showErr(e.message)
   }
@@ -321,14 +435,9 @@ form.addEventListener('submit', async (event) => {
   lastServers = []
   lastActive = ''
   playing = false
-  const clock = startTimer()
+  const finishResolve = beginResolve()
   try {
-    const res = await fetch(`/api/resolve?${queryParams()}`)
-    if (!res.ok) {
-      const data = await res.json()
-      throw new Error(`${data.stage || 'error'}: ${data.error || 'resolve failed'}`)
-    }
-    await pipeNdjson(res, clock)
+    await consumeResolve(`/api/resolve?${queryParams()}`, finishResolve)
   } catch (e) {
     stopTimer()
     timing.hidden = true

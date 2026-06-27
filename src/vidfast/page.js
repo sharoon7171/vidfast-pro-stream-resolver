@@ -38,7 +38,6 @@ export async function fetchPlayerPage(kind, id, options = {}) {
     sessionToken: props.en,
     props,
     meta: { title: props.title, year: props.year },
-    type: kind,
     id,
     referer,
     cookies,

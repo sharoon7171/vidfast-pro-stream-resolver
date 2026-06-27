@@ -324,18 +324,6 @@ button.ok {
   font-weight: 600;
 }
 
-.badge__tag {
-  font-size: 0.72rem;
-  font-weight: 500;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
-.badge--active .badge__tag {
-  color: var(--accent);
-}
-
 .badge__ms {
   font: 0.75rem/1 var(--mono);
   color: var(--muted);

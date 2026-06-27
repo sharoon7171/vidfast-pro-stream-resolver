@@ -1,6 +1,20 @@
 import { Buffer } from 'node:buffer'
 import { userAgent, vidfastOrigin } from '../env.js'
 
+const relayHeaders = {
+  Referer: `${vidfastOrigin}/`,
+  Origin: vidfastOrigin,
+  'User-Agent': userAgent,
+}
+
+function sniffStreamFormat(text, contentType = '') {
+  const ct = contentType.toLowerCase()
+  const head = text.trimStart()
+  if (ct.includes('mpegurl') || ct.includes('m3u8') || head.startsWith('#EXTM3U')) return 'hls'
+  if (ct.includes('dash+xml') || head.startsWith('<?xml') || head.startsWith('<MPD')) return 'dash'
+  return null
+}
+
 function stripTransportStreamPrefix(buffer) {
   if (buffer.length < 4) return buffer
   if (buffer[0] === 0x47) return buffer
@@ -22,26 +36,51 @@ function rewritePlaylistUrls(text, baseUrl, relayBase) {
 }
 
 function isPlaylistResponse(url, contentType, text) {
-  const path = new URL(url).pathname.toLowerCase()
-  return (
-    contentType.includes('mpegurl') ||
-    contentType.includes('m3u8') ||
-    path.endsWith('.m3u8') ||
-    text.startsWith('#EXTM3U')
+  return sniffStreamFormat(text, contentType) === 'hls' || new URL(url).pathname.toLowerCase().endsWith('.m3u8')
+}
+
+export async function probeStreamFormat(url) {
+  const response = await fetch(url, { headers: relayHeaders, redirect: 'follow' })
+  if (!response.ok) throw new Error(`probe failed: ${response.status}`)
+
+  const reader = response.body.getReader()
+  const { value } = await reader.read()
+  await reader.cancel()
+
+  if (!value?.length) throw new Error('probe empty')
+
+  const format = sniffStreamFormat(
+    Buffer.from(value).toString('utf8'),
+    response.headers.get('content-type') || '',
   )
+  if (!format) throw new Error('unknown stream format')
+  return format
 }
 
 export async function relayHlsStream(url, relayBase) {
   const response = await fetch(url, {
-    headers: { Referer: `${vidfastOrigin}/`, Origin: vidfastOrigin, 'User-Agent': userAgent },
+    headers: relayHeaders,
     redirect: 'follow',
   })
   if (!response.ok) throw new Error(`upstream ${response.status}`)
 
   const contentType = response.headers.get('content-type') || ''
   const raw = Buffer.from(await response.arrayBuffer())
+  const textHead = raw.toString('utf8', 0, Math.min(raw.length, 512))
 
-  if (isPlaylistResponse(url, contentType, raw.toString('utf8', 0, Math.min(raw.length, 16)))) {
+  if (sniffStreamFormat(textHead, contentType) === 'dash') {
+    return {
+      status: 200,
+      headers: {
+        'Content-Type': 'application/dash+xml',
+        'Access-Control-Allow-Origin': '*',
+        'Cache-Control': 'no-cache',
+      },
+      body: raw.toString('utf8'),
+    }
+  }
+
+  if (isPlaylistResponse(url, contentType, textHead)) {
     return {
       status: 200,
       headers: {

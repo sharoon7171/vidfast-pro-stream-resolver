@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 const root = dirname(fileURLToPath(import.meta.url))
 const publicRoot = join(root, '../../public')
 const hlsModule = join(root, '../../node_modules/hls.js/dist/hls.mjs')
+const dashModule = join(root, '../../node_modules/dashjs/dist/modern/esm/dash.all.min.js')
 
 const assets = {
   '/': [join(publicRoot, 'index.html'), 'text/html; charset=utf-8'],
@@ -12,6 +13,7 @@ const assets = {
   '/style.css': [join(publicRoot, 'style.css'), 'text/css; charset=utf-8'],
   '/player.js': [join(publicRoot, 'player.js'), 'application/javascript; charset=utf-8'],
   '/vendor/hls.mjs': [hlsModule, 'application/javascript; charset=utf-8'],
+  '/vendor/dash.mjs': [dashModule, 'application/javascript; charset=utf-8'],
 }
 
 export function serveStatic(pathname, res) {

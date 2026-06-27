@@ -1,5 +1,5 @@
 import { serveStatic } from './static.js'
-import { relayHlsStream } from '../relay/hls.js'
+import { relayHlsStream, probeStreamFormat } from '../relay/hls.js'
 import { parseResolveInput } from '../resolve/input.js'
 import { stream } from '../resolve/stream.js'
 
@@ -19,9 +19,11 @@ async function ndjson(res, generator) {
     ...cors,
   })
   res.flushHeaders?.()
+  res.socket?.setNoDelay(true)
   for await (const event of generator) {
+    const line = `${JSON.stringify(event)}\n`
     await new Promise((resolve, reject) => {
-      res.write(`${JSON.stringify(event)}\n`, (error) => (error ? reject(error) : resolve()))
+      res.write(line, (error) => (error ? reject(error) : resolve()))
     })
   }
   res.end()
@@ -35,6 +37,18 @@ export async function route(req, res) {
   }
 
   const { pathname, searchParams, origin } = new URL(req.url ?? '/', `http://${req.headers.host}`)
+
+  if (pathname === '/api/sniff') {
+    const target = searchParams.get('url')
+    if (!target) return json(res, 400, { error: 'url required' })
+    try {
+      const format = await probeStreamFormat(target)
+      json(res, 200, { format })
+    } catch (error) {
+      json(res, 502, { error: String(error.message || error) })
+    }
+    return
+  }
 
   if (pathname === '/api/hls') {
     const target = searchParams.get('url')

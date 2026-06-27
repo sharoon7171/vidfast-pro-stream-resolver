@@ -8,6 +8,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "dashjs": "^5.2.0",
     "happy-dom": "^20.10.6",
     "hls.js": "^1.6.16"
   }

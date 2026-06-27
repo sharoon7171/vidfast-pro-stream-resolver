@@ -1,12 +1,12 @@
 export async function* runParallel(items, worker, concurrency) {
-  const queue = items.map((item, index) => ({ item, index }))
+  const queue = [...items]
   const inFlight = new Map()
 
-  const spawn = ({ item, index }) => {
+  const spawn = (item) => {
     const taskId = Symbol()
-    const promise = worker(item, index)
-      .then((value) => ({ taskId, index, item, value }))
-      .catch((error) => ({ taskId, index, item, error }))
+    const promise = worker(item)
+      .then((value) => ({ taskId, value }))
+      .catch((error) => ({ taskId, error }))
     inFlight.set(taskId, promise)
   }
 

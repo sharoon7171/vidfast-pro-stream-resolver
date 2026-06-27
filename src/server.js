@@ -4,6 +4,8 @@ import { route } from './http/router.js'
 
 const server = createServer(route)
 
+server.on('connection', (socket) => socket.setNoDelay(true))
+
 function boot() {
   console.log(`http://localhost:${port}/`)
 }

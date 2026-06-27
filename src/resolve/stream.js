@@ -10,53 +10,51 @@ function serversWithData(servers) {
   return list.filter((entry) => entry?.data)
 }
 
-async function prepareResolveSession(input) {
-  const page = await fetchPlayerPage(input.kind, input.id, {
-    season: input.season,
-    episode: input.episode,
-  })
-  const playerFetch = createPlayerFetch(page.referer, page.cookies)
-  const resolved = await resolveServers(page.sessionToken, {
-    props: page.props,
-    type: page.type,
-    id: page.id,
-    season: input.season,
-    episode: input.episode,
-    referer: page.referer,
-    fetch: playerFetch,
-  })
-  const servers = serversWithData(resolved.servers)
-  if (!servers.length) throw Object.assign(new Error('server list empty'), { stage: 'resolve' })
-  return { page, playerFetch, playerContext: resolved.playerContext, servers }
-}
-
-async function testServerStream(server, playerFetch, playerContext, siteOrigin) {
-  const started = Date.now()
-  const { url } = await openServerStream(server, playerFetch, playerContext)
-  return {
-    name: server.name,
-    ms: Date.now() - started,
-    url,
-    play: playUrl(siteOrigin, url),
-  }
-}
-
 export async function* stream(input, siteOrigin) {
-  let session
+  let page
   try {
-    session = await prepareResolveSession(input)
+    page = await fetchPlayerPage(input.kind, input.id, {
+      season: input.season,
+      episode: input.episode,
+    })
   } catch (err) {
     yield { event: 'error', stage: err.stage || 'resolve', error: err.message }
     return
   }
 
-  const { page, playerFetch, playerContext, servers } = session
   yield { event: 'meta', title: page.meta.title, year: page.meta.year }
 
+  let session
+  try {
+    const playerFetch = createPlayerFetch(page.referer, page.cookies)
+    const resolved = await resolveServers(page.sessionToken, {
+      props: page.props,
+      id: page.id,
+      referer: page.referer,
+      fetch: playerFetch,
+    })
+    const servers = serversWithData(resolved.servers)
+    if (!servers.length) throw Object.assign(new Error('server list empty'), { stage: 'resolve' })
+    session = { playerFetch, playerContext: resolved.playerContext, servers }
+  } catch (err) {
+    yield { event: 'error', stage: err.stage || 'resolve', error: err.message }
+    return
+  }
+
+  const { playerFetch, playerContext, servers } = session
   let found = false
   for await (const hit of runParallel(
     servers,
-    (server) => testServerStream(server, playerFetch, playerContext, siteOrigin),
+    async (server) => {
+      const started = Date.now()
+      const { url } = await openServerStream(server, playerFetch, playerContext)
+      return {
+        name: server.name,
+        ms: Date.now() - started,
+        url,
+        play: playUrl(siteOrigin, url),
+      }
+    },
     servers.length,
   )) {
     if (hit.error) continue

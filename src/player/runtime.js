@@ -16,7 +16,6 @@ const moduleCache = {}
 let sandbox = null
 let cryptoModule = null
 let playerBuffer = null
-let playerApiPrefix = null
 
 function defineExports(exports, map) {
   for (const [key, value] of Object.entries(map)) {
@@ -93,12 +92,11 @@ function ensurePlayerReady() {
     BUNDLE_STREAM_SEGMENT_INDEX,
     BUNDLE_STREAM_SEGMENT_SALT,
   )
-  playerApiPrefix = sandbox.__playerApiPrefix
 }
 
 export function isPlayerApiUrl(url) {
-  if (!playerApiPrefix) throw new Error('player API prefix not loaded')
-  return String(url).includes(playerApiPrefix)
+  ensurePlayerReady()
+  return String(url).includes(sandbox.__playerApiPrefix)
 }
 
 function buildStreamRequestPath(server) {
@@ -239,7 +237,7 @@ export async function resolveServers(sessionToken, ctx = {}) {
 
   await requirePlayerExport('__playerInit')(playerContext)
 
-  const deadline = Date.now() + (ctx.timeoutMs || RESOLVE_TIMEOUT_MS)
+  const deadline = Date.now() + RESOLVE_TIMEOUT_MS
   while (servers.length === 0 && Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, 250))
   }
