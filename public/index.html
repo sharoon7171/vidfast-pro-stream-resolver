@@ -1,323 +1,125 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>VidFast Stream Player</title>
-  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.15"></script>
-  <style>
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: system-ui, sans-serif; background: #0f1117; color: #e8eaed; }
-    .wrap { max-width: 960px; margin: 0 auto; padding: 24px 16px 40px; display: flex; flex-direction: column; gap: 16px; }
-    .head h1 { font-size: 1.5rem; font-weight: 600; margin-bottom: 6px; }
-    .head p { color: #9aa0a6; font-size: 0.9rem; line-height: 1.45; }
-    .head a { color: #8ab4f8; text-decoration: none; }
-    .head a:hover { text-decoration: underline; }
-    .q-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
-    .q-field { display: flex; flex-direction: column; gap: 4px; font-size: 0.75rem; color: #9aa0a6; }
-    .q-field input, .q-field select { background: #1a1d27; border: 1px solid #2d3140; border-radius: 6px; color: #e8eaed; padding: 8px 10px; font-size: 0.9rem; min-width: 100px; }
-    .q-field input:focus, .q-field select:focus { outline: none; border-color: #8ab4f8; }
-    .q-run { background: #8ab4f8; color: #0f1117; border: none; border-radius: 6px; padding: 9px 18px; font-size: 0.9rem; font-weight: 600; cursor: pointer; }
-    .q-run:hover { background: #aecbfa; }
-    .q-run:disabled { opacity: 0.5; cursor: not-allowed; }
-    .bar { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; font-size: 0.85rem; color: #9aa0a6; min-height: 1.2em; }
-    .bar.err { color: #f28b82; }
-    .bar-path { color: #8ab4f8; }
-    .sec-title { font-size: 0.75rem; color: #9aa0a6; font-weight: 600; margin-bottom: 10px; letter-spacing: 0.04em; text-transform: uppercase; }
-    #play { width: 100%; background: #000; border-radius: 8px; aspect-ratio: 16/9; display: block; }
-    .srv-list { display: flex; flex-wrap: wrap; gap: 8px; }
-    .srv-btn { background: #1a1d27; border: 1px solid #2d3140; color: #e8eaed; border-radius: 6px; padding: 7px 12px; font-size: 0.8rem; cursor: pointer; }
-    .srv-btn:hover { border-color: #8ab4f8; }
-    .srv-btn.on { background: #2d3a52; border-color: #8ab4f8; color: #8ab4f8; }
-    .link-list { display: grid; gap: 10px; }
-    .link-box { padding: 10px 12px; background: #1a1d27; border: 1px solid #2d3140; border-radius: 8px; }
-    .link-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; }
-    .link-tag { font-size: 0.75rem; font-weight: 600; color: #9aa0a6; letter-spacing: 0.04em; text-transform: uppercase; }
-    .link-cp { background: #2d3140; border: 1px solid #3d4455; color: #8ab4f8; border-radius: 6px; padding: 4px 10px; font-size: 0.75rem; font-weight: 600; cursor: pointer; font-family: inherit; }
-    .link-cp:hover { border-color: #8ab4f8; background: #2d3a52; }
-    .link-val { word-break: break-all; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.75rem; line-height: 1.4; color: #e8eaed; }
-    .hide { display: none; }
-  </style>
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="Resolve HLS stream URLs from vidfast.pro by TMDB movie or TV ID. Play in the browser or export links for VLC and MPV.">
+  <title>VidFast HLS Stream Resolver</title>
+  <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <main class="wrap">
-    <header class="head">
-      <h1>VidFast Stream Player</h1>
-      <p>Resolve and play streams from <a href="https://www.vidfast.net/" target="_blank" rel="noopener">vidfast.net</a>. First server plays instantly; rest load in parallel.</p>
+  <div class="app">
+    <header class="top">
+      <h1 class="top__title">VidFast HLS Stream Resolver</h1>
+      <p class="top__desc">Resolve HLS stream URLs from <a href="https://vidfast.pro" target="_blank" rel="noopener noreferrer">vidfast.pro</a> by TMDB movie or TV ID. Play in the browser or export links for VLC and MPV.</p>
     </header>
 
-    <form id="q">
-      <div class="q-row">
-        <label class="q-field">Type
-          <select id="q-type">
-            <option value="movie">Movie</option>
-            <option value="tv">TV</option>
-          </select>
-        </label>
-        <label class="q-field">ID
-          <input id="q-id" type="text" value="550" placeholder="TMDB" required>
-        </label>
-        <label class="q-field hide" id="q-season-wrap">Season
-          <input id="q-season" type="text" value="1">
-        </label>
-        <label class="q-field hide" id="q-ep-wrap">Episode
-          <input id="q-ep" type="text" value="1">
-        </label>
-        <button type="submit" class="q-run" id="q-run">Fetch streams</button>
+    <section class="card">
+      <form id="form">
+        <div class="resolve__row resolve__row--form">
+          <label class="resolve__field">
+            <span class="resolve__label">Type</span>
+            <select id="type">
+              <option value="movie">Movie</option>
+              <option value="tv">TV</option>
+            </select>
+          </label>
+          <label class="resolve__field resolve__field--grow">
+            <span class="resolve__label" id="id-label">Movie ID</span>
+            <input id="id" type="text" inputmode="numeric" required placeholder="550" value="550">
+          </label>
+          <div class="resolve__tv" id="tv-fields" hidden>
+            <label class="resolve__field">
+              <span class="resolve__label">Season</span>
+              <input id="season" type="text" inputmode="numeric" placeholder="1">
+            </label>
+            <label class="resolve__field">
+              <span class="resolve__label">Episode</span>
+              <input id="episode" type="text" inputmode="numeric" placeholder="1">
+            </label>
+          </div>
+          <button type="submit">Resolve</button>
+        </div>
+        <p class="resolve__hint" id="hint-movie">Movie — TMDB ID only, e.g. <code>550</code></p>
+        <p class="resolve__hint" id="hint-tv" hidden>TV — TMDB ID plus season and episode, e.g. <code>44217</code> · S1 · E1</p>
+      </form>
+      <p id="err" class="msg msg--err" hidden></p>
+      <ul id="timing" class="timing" hidden>
+        <li>
+          <span class="timing__label">Resolve</span>
+          <span id="t-resolve" class="timing__val">—</span>
+        </li>
+        <li>
+          <span class="timing__label">First frame</span>
+          <span id="t-play" class="timing__val">—</span>
+        </li>
+        <li>
+          <span class="timing__label">Total</span>
+          <span id="t-total" class="timing__val">—</span>
+        </li>
+      </ul>
+    </section>
+
+    <section id="out" class="stack" hidden>
+      <div class="card">
+        <h2 id="title" class="stream-title">Stream</h2>
+        <div class="player">
+          <div id="player"><video id="video" controls playsinline></video></div>
+        </div>
       </div>
-    </form>
 
-    <div class="bar" id="bar">
-      <span id="bar-msg"></span>
-      <span class="bar-path hide" id="bar-path"></span>
-    </div>
+      <div class="card">
+        <h3 class="section-title">Servers</h3>
+        <div id="servers" class="servers"></div>
+      </div>
 
-    <section id="sec-play">
-      <video id="play" controls playsinline></video>
-    </section>
-
-    <section id="sec-srv">
-      <h2 class="sec-title">Servers</h2>
-      <div class="srv-list" id="srv-list"></div>
-    </section>
-
-    <section class="hide" id="sec-links">
-      <h2 class="sec-title" id="links-h">Links</h2>
-      <div class="link-list">
-        <article class="link-box">
-          <div class="link-top">
-            <span class="link-tag">direct</span>
-            <button type="button" class="link-cp" data-k="direct">Copy</button>
-          </div>
-          <div class="link-val" id="v-direct"></div>
-        </article>
-        <article class="link-box">
-          <div class="link-top">
-            <span class="link-tag">proxy</span>
-            <button type="button" class="link-cp" data-k="proxy">Copy</button>
-          </div>
-          <div class="link-val" id="v-proxy"></div>
-        </article>
-        <article class="link-box">
-          <div class="link-top">
-            <span class="link-tag">mpv</span>
-            <button type="button" class="link-cp" data-k="mpv">Copy</button>
-          </div>
-          <div class="link-val" id="v-mpv"></div>
-        </article>
-        <article class="link-box">
-          <div class="link-top">
-            <span class="link-tag">vlc</span>
-            <button type="button" class="link-cp" data-k="vlc">Copy</button>
-          </div>
-          <div class="link-val" id="v-vlc"></div>
-        </article>
+      <div class="card">
+        <h3 class="section-title">Export</h3>
+        <ul class="exports">
+          <li>
+            <div class="export__meta">
+              <span class="export__name">Direct URL</span>
+              <span class="export__hint">Upstream M3U8 URL</span>
+            </div>
+            <div class="export__row">
+              <input id="direct" readonly>
+              <button type="button" data-copy="direct">Copy</button>
+            </div>
+          </li>
+          <li>
+            <div class="export__meta">
+              <span class="export__name">Browser URL</span>
+              <span class="export__hint">Browser playback URL</span>
+            </div>
+            <div class="export__row">
+              <input id="browser" readonly>
+              <button type="button" data-copy="browser">Copy</button>
+            </div>
+          </li>
+          <li>
+            <div class="export__meta">
+              <span class="export__name">VLC</span>
+              <span class="export__hint">VLC with vidfast.pro referer</span>
+            </div>
+            <div class="export__row">
+              <input id="vlc" readonly>
+              <button type="button" data-copy="vlc">Copy</button>
+            </div>
+          </li>
+          <li>
+            <div class="export__meta">
+              <span class="export__name">MPV</span>
+              <span class="export__hint">MPV with vidfast.pro referer</span>
+            </div>
+            <div class="export__row">
+              <input id="mpv" readonly>
+              <button type="button" data-copy="mpv">Copy</button>
+            </div>
+          </li>
+        </ul>
       </div>
     </section>
-  </main>
-
-  <script>
-    const REF = 'https://vidfast.pro/'
-
-    const ui = {
-      bar: document.getElementById('bar'),
-      msg: document.getElementById('bar-msg'),
-      path: document.getElementById('bar-path'),
-      q: document.getElementById('q'),
-      qType: document.getElementById('q-type'),
-      qId: document.getElementById('q-id'),
-      qSeasonWrap: document.getElementById('q-season-wrap'),
-      qSeason: document.getElementById('q-season'),
-      qEpWrap: document.getElementById('q-ep-wrap'),
-      qEp: document.getElementById('q-ep'),
-      qRun: document.getElementById('q-run'),
-      play: document.getElementById('play'),
-      srvList: document.getElementById('srv-list'),
-      secLinks: document.getElementById('sec-links'),
-      linksH: document.getElementById('links-h'),
-      linkVal: {
-        direct: document.getElementById('v-direct'),
-        proxy: document.getElementById('v-proxy'),
-        mpv: document.getElementById('v-mpv'),
-        vlc: document.getElementById('v-vlc'),
-      },
-    }
-
-    const state = {
-      hls: null,
-      list: null,
-      idx: 0,
-      links: { direct: '', proxy: '', mpv: '', vlc: '' },
-    }
-
-    function msg(text, err) {
-      ui.msg.textContent = text
-      ui.bar.classList.toggle('err', !!err)
-    }
-
-    function tvMode(on) {
-      ui.qSeasonWrap.classList.toggle('hide', !on)
-      ui.qEpWrap.classList.toggle('hide', !on)
-    }
-
-    function packLinks(srv) {
-      return {
-        direct: srv.streamUrl,
-        proxy: srv.playbackUrl,
-        mpv: `mpv --referrer='${REF}' '${srv.streamUrl}'`,
-        vlc: `vlc --http-referrer='${REF}' '${srv.streamUrl}'`,
-      }
-    }
-
-    function showLinks(srv) {
-      state.links = packLinks(srv)
-      ui.linksH.textContent = 'Links — ' + srv.name
-      ui.linkVal.direct.textContent = state.links.direct
-      ui.linkVal.proxy.textContent = state.links.proxy
-      ui.linkVal.mpv.textContent = state.links.mpv
-      ui.linkVal.vlc.textContent = state.links.vlc
-      ui.secLinks.classList.remove('hide')
-    }
-
-    async function cp(text, tag) {
-      await navigator.clipboard.writeText(text)
-      msg('Copied ' + tag)
-    }
-
-    function playProxy(url) {
-      if (state.hls) { state.hls.destroy(); state.hls = null }
-      const go = () => ui.play.play().catch(() => {})
-      if (ui.play.canPlayType('application/vnd.apple.mpegurl')) {
-        ui.play.src = url
-        ui.play.addEventListener('loadedmetadata', go, { once: true })
-      } else if (Hls.isSupported()) {
-        state.hls = new Hls()
-        state.hls.on(Hls.Events.MANIFEST_PARSED, go)
-        state.hls.loadSource(url)
-        state.hls.attachMedia(ui.play)
-      } else {
-        msg('HLS not supported', true)
-      }
-    }
-
-    function paintSrv(list, idx) {
-      ui.srvList.innerHTML = ''
-      list.forEach((srv, i) => {
-        const btn = document.createElement('button')
-        btn.type = 'button'
-        btn.className = 'srv-btn' + (i === idx ? ' on' : '')
-        btn.textContent = srv.name + (srv.description ? ' — ' + srv.description : '')
-        btn.addEventListener('click', () => pickSrv(i))
-        ui.srvList.appendChild(btn)
-      })
-    }
-
-    function statSrv() {
-      const srv = state.list[state.idx]
-      msg('Playing ' + srv.name + ' — ' + state.list.length + ' available')
-    }
-
-    function pickSrv(idx, quiet) {
-      if (!state.list?.[idx]) return
-      state.idx = idx
-      const srv = state.list[idx]
-      paintSrv(state.list, idx)
-      playProxy(srv.playbackUrl)
-      showLinks(srv)
-      if (!quiet) statSrv()
-    }
-
-    async function pipeNdjson(res) {
-      const reader = res.body.getReader()
-      const dec = new TextDecoder()
-      let buf = ''
-      let boot = false
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buf += dec.decode(value, { stream: true })
-        const lines = buf.split('\n')
-        buf = lines.pop() || ''
-
-        for (const line of lines) {
-          if (!line.trim()) continue
-          const evt = JSON.parse(line)
-          if (evt.event === 'error') throw new Error(evt.error || 'resolve failed')
-          if (evt.event === 'meta') {
-            ui.path.textContent = evt.contentPath || ''
-            ui.path.classList.remove('hide')
-            msg('Probing…')
-          }
-          if (evt.event === 'server') {
-            if (!state.list) state.list = []
-            state.list.push(evt.server)
-            paintSrv(state.list, state.idx)
-            if (!boot) {
-              boot = true
-              pickSrv(0, true)
-            }
-            statSrv()
-          }
-          if (evt.event === 'done') {
-            state.list = evt.servers
-            state.idx = Math.min(state.idx, state.list.length - 1)
-            paintSrv(state.list, state.idx)
-            showLinks(state.list[state.idx])
-            statSrv()
-          }
-        }
-      }
-
-      if (!state.list?.length) throw new Error('no servers returned')
-    }
-
-    function qParams() {
-      const p = new URLSearchParams({ id: ui.qId.value.trim(), type: ui.qType.value })
-      if (ui.qType.value === 'tv') {
-        p.set('season', ui.qSeason.value.trim())
-        p.set('episode', ui.qEp.value.trim())
-      }
-      return p
-    }
-
-    function resetRun() {
-      msg('Resolving…')
-      ui.path.classList.add('hide')
-      ui.secLinks.classList.add('hide')
-      ui.srvList.innerHTML = ''
-      state.list = null
-      state.idx = 0
-      state.links = { direct: '', proxy: '', mpv: '', vlc: '' }
-      if (state.hls) { state.hls.destroy(); state.hls = null }
-      ui.play.removeAttribute('src')
-      ui.play.load()
-    }
-
-    ui.qType.addEventListener('change', () => tvMode(ui.qType.value === 'tv'))
-    tvMode(false)
-
-    document.querySelectorAll('.link-cp').forEach((btn) => {
-      btn.addEventListener('click', () => cp(state.links[btn.dataset.k], btn.dataset.k))
-    })
-
-    ui.q.addEventListener('submit', async (e) => {
-      e.preventDefault()
-      ui.qRun.disabled = true
-      resetRun()
-      try {
-        const res = await fetch('/api/resolve?' + qParams())
-        if (!res.ok) {
-          const data = await res.json()
-          throw new Error(data.error || 'resolve failed')
-        }
-        await pipeNdjson(res)
-      } catch (err) {
-        msg(String(err.message || err), true)
-      } finally {
-        ui.qRun.disabled = false
-      }
-    })
-  </script>
+  </div>
+  <script type="module" src="/player.js"></script>
 </body>
 </html>

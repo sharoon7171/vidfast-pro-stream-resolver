@@ -1,8 +1,14 @@
 {
   "name": "vidfast-pro",
-  "private": true,
   "type": "module",
   "scripts": {
-    "start": "node src/srv/http.js"
+    "start": "node src/server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "happy-dom": "^20.10.6",
+    "hls.js": "^1.6.16"
   }
 }
